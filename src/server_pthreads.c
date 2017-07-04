@@ -22,6 +22,13 @@
 #define BACKLOG 10     // how many pending connections queue will hold
 #define MAXTHREADS 10 // the maximum amount of threads to create for incoming connections
 
+// Struct passed to new threads
+struct t_args {
+	int tid;
+	int *comm_thread_scoreboard;
+	int *thread_fd;
+};
+
 void sigchld_handler(int s)
 {
     // waitpid() might overwrite errno, so we save and restore it:
@@ -79,6 +86,40 @@ void * comm(void * data)
         perror("send");
 
     close(thread_fd);
+    return NULL;
+}
+
+void * comm2(void *args)
+{
+	struct t_args *myargs;
+	myargs = (struct t_args *) args;
+	int myid = myargs->tid;
+	int *comm_thread_scoreboard = myargs->comm_thread_scoreboard;
+
+	// Debugging
+	//printf("My ID is %d\n", myid);
+	//printf("comm_thread_scoreboard resides at %p\n", (void *)comm_thread_scoreboard);
+	//printf("My ID state is %d\n", (int *)comm_thread_scoreboard[myid]);
+
+    int numbytes;
+    char buf[MAXDATASIZE];
+    //int thread_fd = * (int *) data;
+    int thread_fd = * (int *)myargs->thread_fd;
+
+    if ((numbytes = recv(thread_fd, buf, MAXDATASIZE-1, 0)) == -1) {
+        perror("recv");
+		comm_thread_scoreboard[myid] = 0;
+        return NULL;
+    }
+
+    buf[numbytes] = '\0';
+    printf("server: received '%s'\n",buf);
+
+    if (send(thread_fd, buf, numbytes, 0) == -1)
+        perror("send");
+
+    close(thread_fd);
+	comm_thread_scoreboard[myid] = 0;
     return NULL;
 }
 
@@ -184,7 +225,15 @@ int main(void)
 
         // update that this thread is used up!
         comm_thread_scoreboard[next_available_thread] = 1;
-        pthread_create(&comm_thread[next_available_thread], NULL, comm, (void *) &new_fd);
+
+		// Pack struct with args for new thread
+		// I have no idea if this is thread-safe
+		struct t_args targs;
+		targs.tid = next_available_thread;
+		targs.comm_thread_scoreboard = &comm_thread_scoreboard;
+		targs.thread_fd = &new_fd;
+        //pthread_create(&comm_thread[next_available_thread], NULL, comm, (void *) &new_fd);
+        pthread_create(&comm_thread[next_available_thread], NULL, comm2, (void *) &targs);
     }
 
     return 0;
